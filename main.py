@@ -14,10 +14,16 @@ RESTAURANTS = {
 
 SLACK_WEBHOOK_URL = os.environ.get('SLACK_WEBHOOK_URL')
 
-def get_korea_today_formatted():
-    # 카카오 날짜 형식에 맞춤 (예: 25.11.20) -> 점(.)으로 구분
+def get_today_keywords():
     korea_time = datetime.now(timezone.utc) + timedelta(hours=9)
-    return korea_time.strftime("%y.%m.%d") 
+    # 1. "11.20" (가장 흔한 포맷)
+    keyword1 = korea_time.strftime("%m.%d")
+    # 2. "11/20" (가끔 이렇게 쓰는 경우)
+    keyword2 = korea_time.strftime("%m/%d")
+    # 3. "11월 20일" (한글 포맷)
+    keyword3 = korea_time.strftime("%m월 %d일")
+    
+    return [keyword1, keyword2, keyword3]
 
 def send_slack_message(text, image_url=None):
     payload = {"text": text}
@@ -34,67 +40,79 @@ def get_lunch_menu():
     
     driver = webdriver.Chrome(options=options)
     
-    # 제대로 될 때까지 기다리는 횟수 (3시간 = 36회)
-    # 테스트할 때는 1로 줄여서 바로 확인 가능
-    max_retries = 36
+    # 테스트니까 1번만 확인하고 바로 결과 보고
+    max_retries = 1 
     
-    found_status = {name: False for name in RESTAURANTS}
-    today_str = get_korea_today_formatted() # 예: 24.11.20
-    
-    print(f"🔍 [기준 날짜] 오늘은 '{today_str}' 입니다.")
+    today_keywords = get_today_keywords()
+    print(f"🔍 [검색 조건] 이 글자들을 찾습니다: {today_keywords}")
+    print(f"   (또는 '분 전', '시간 전'도 찾습니다)")
 
     try:
         for i in range(max_retries):
             for name, url in RESTAURANTS.items():
-                if found_status[name]: continue # 이미 찾은 곳은 패스
-
-                print(f"[{name}] 확인 중...")
+                print(f"\n--------------------------------")
+                print(f"🏢 [{name}] 페이지 접속 중...")
                 driver.get(url)
-                time.sleep(3)
+                time.sleep(5) # 로딩 대기
                 
                 posts = driver.find_elements(By.CSS_SELECTOR, "div.post_item")
-                if not posts: continue
+                if not posts:
+                    print("   ❌ 게시물을 하나도 못 읽어왔습니다. (사이트 구조 변경?)")
+                    continue
 
-                # 상위 3개 글 날짜 확인
-                for post in posts[:3]:
+                print(f"   📄 최신 글 3개를 분석합니다:")
+                
+                # 상위 3개 글 정밀 분석
+                for index, post in enumerate(posts[:3]):
                     try:
-                        # 카카오 채널 날짜 위치 (span.txt_date)
+                        # 1. 게시 날짜(메타데이터) 확인
                         date_element = post.find_element(By.CSS_SELECTOR, "span.txt_date")
-                        post_date = date_element.text # 예: "24.11.20" 또는 "1시간 전"
+                        post_date_text = date_element.text
                         
-                        # 조건: 날짜가 오늘 날짜와 같거나, "분 전", "시간 전"이라고 되어 있으면 오늘 글임!
-                        is_today = (today_str in post_date) or ("분 전" in post_date) or ("시간 전" in post_date)
+                        # 2. 본문 내용 확인
+                        post_content = post.text[:30].replace("\n", " ") # 앞 30글자만
+                        
+                        print(f"   [글 {index+1}] 날짜: '{post_date_text}' / 내용: '{post_content}...'")
+                        
+                        # 판별 로직
+                        is_today = False
+                        
+                        # A. '방금 전', '1시간 전' 체크
+                        if "분 전" in post_date_text or "시간 전" in post_date_text:
+                            print("      👉 'n시간 전'이라서 합격!")
+                            is_today = True
+                        
+                        # B. 날짜 키워드 매칭 (11.20 등)
+                        if not is_today:
+                            for keyword in today_keywords:
+                                if keyword in post_date_text or keyword in post_content:
+                                    print(f"      👉 키워드('{keyword}') 발견으로 합격!")
+                                    is_today = True
+                                    break
                         
                         if is_today:
-                            print(f"   ✅ 오늘 게시물 발견! (작성시간: {post_date})")
-                            post_text = post.text
-                            
-                            # 이미지 찾기
+                            print("      🎉 오늘 메뉴 찾았습니다! 슬랙 전송!")
                             try:
                                 img_tag = post.find_element(By.TAG_NAME, "img")
                                 img_url = img_tag.get_attribute("src").replace("fname=", "")
-                                send_slack_message(f"🍱 [{name}] 오늘 메뉴가 도착했습니다!", img_url)
+                                send_slack_message(f"🍱 [{name}] 오늘 메뉴 발견!", img_url)
                             except:
-                                send_slack_message(f"🍱 [{name}] 오늘 메뉴 (텍스트) 입니다.\n{post_text[:200]}...")
+                                send_slack_message(f"🍱 [{name}] 텍스트 메뉴입니다.\n{post.text}")
                             
-                            found_status[name] = True
-                            break # 해당 식당 찾았으니 다음 식당으로
+                            # 찾았으니 다음 식당으로 넘어감
+                            break 
+                        else:
+                             print("      ❌ 오늘 날짜와 다릅니다.")
 
                     except Exception as e:
-                        print(f"   ⚠️ 날짜 확인 중 에러: {e}")
-                        continue
+                        print(f"      ⚠️ 분석 중 에러: {e}")
 
-            if all(found_status.values()):
-                print("🚀 모든 식당 메뉴 전송 완료! 퇴근합니다.")
-                return
-
-            print(f"--- 아직 안 올라온 곳이 있어 5분 뒤 다시 봅니다 ({i+1}/{max_retries}) ---")
-            time.sleep(300)
-
-        send_slack_message("😢 3시간을 기다렸지만 아직 메뉴가 안 올라왔어요.")
+            print("\n--------------------------------")
+            print("🏁 진단이 끝났습니다. 로그를 확인해주세요.")
+            return
 
     except Exception as e:
-        print(f"에러 발생: {e}")
+        print(f"치명적 오류: {e}")
     finally:
         driver.quit()
 
