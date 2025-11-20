@@ -25,4 +25,4 @@ jobs:
       - name: Run Bot
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        run: python main.py
+        run: python -u main.py
