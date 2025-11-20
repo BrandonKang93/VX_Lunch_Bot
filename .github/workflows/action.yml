@@ -20,7 +20,7 @@ jobs:
 
       - name: Install libraries
         run: |
-          pip install selenium requests webdriver-manager
+          pip install selenium requests webdriver-manager beautifulsoup4
 
       - name: Run Bot
         env:
