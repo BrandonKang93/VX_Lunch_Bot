@@ -1,5 +1,5 @@
 import requests
-from bs4 import BeautifulSoup
+import re
 import os
 import time
 from datetime import datetime, timedelta, timezone
@@ -23,26 +23,52 @@ def send_slack_message(text, image_url=None):
 
 def get_korea_today_keywords():
     korea_time = datetime.now(timezone.utc) + timedelta(hours=9)
+    # 정규식으로 찾을 날짜 패턴들
     return [
-        korea_time.strftime("%y.%m.%d"),   # 24.11.20 (카카오 기본)
-        korea_time.strftime("%Y. %m. %d"), # 2024. 11. 20. (가끔 보임)
+        korea_time.strftime("%y.%m.%d"),   # 24.11.20
+        korea_time.strftime("%Y. %m. %d"), # 2024. 11. 20.
         korea_time.strftime("%m월 %d일")   # 11월 20일
     ]
 
+def extract_menu_from_html(html_text, keywords):
+    """
+    HTML 태그 파싱 대신, 텍스트 전체에서 날짜와 메뉴를 찾습니다.
+    """
+    # 1. 소스코드 내의 모든 텍스트 정리 (유니코드 등 변환)
+    # 카카오 데이터는 보통 "description":"메뉴내용..." 형태로 숨어있음
+    
+    for kw in keywords:
+        if kw in html_text:
+            print(f"      👉 소스코드 내에서 날짜 키워드 '{kw}' 발견!")
+            
+            # 날짜 주변의 텍스트를 잘라서 가져오기 (간이 파싱)
+            # 해당 날짜가 등장한 위치를 찾음
+            idx = html_text.find(kw)
+            
+            # 날짜 뒤에 있는 내용 300자 추출 (보통 메뉴가 뒤에 있음)
+            # 앞뒤로 넉넉하게 잘라서 분석
+            snippet = html_text[idx:idx+500]
+            
+            # 너무 지저분한 기호 제거
+            clean_snippet = re.sub(r'[{"},:;]', ' ', snippet)
+            
+            return clean_snippet
+            
+    return None
+
 def get_lunch_menu():
-    print("🕵️‍♀️ [구글봇 모드] 검색 엔진인 척 접근하여 데이터를 가져옵니다...")
+    print("🕵️‍♀️ [데이터 발굴 모드] 숨겨진 텍스트 데이터를 찾습니다...")
     
     today_keywords = get_korea_today_keywords()
-    print(f"   🔍 찾는 날짜 키워드: {today_keywords} (또는 '분 전', '시간 전')")
+    print(f"   🔍 찾는 날짜: {today_keywords}")
 
-    # 구글 검색 로봇의 헤더 (차단 회피용)
+    # 모바일 브라우저인 척 위장
     headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+        "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7"
+        "Accept-Language": "ko-KR,ko;q=0.9"
     }
 
-    # 3시간 반복 (36회)
     max_retries = 36
     found_status = {name: False for name in RESTAURANTS}
 
@@ -51,82 +77,55 @@ def get_lunch_menu():
             for name, url in RESTAURANTS.items():
                 if found_status[name]: continue
 
-                print(f"\n[{name}] 페이지 읽는 중...")
+                print(f"\n[{name}] 데이터 다운로드 중...")
                 
                 try:
                     response = requests.get(url, headers=headers, timeout=10)
                     
-                    if response.status_code != 200:
-                        print(f"   ⚠️ 접속 실패 (상태코드: {response.status_code})")
+                    # 내용이 너무 짧으면 차단된 것
+                    if len(response.text) < 1000:
+                        print(f"   ⚠️ 내용이 너무 짧습니다 (차단 의심). 길이: {len(response.text)}")
+                        print(f"   내용 미리보기: {response.text[:100]}")
                         continue
+                        
+                    # 정규식/단순검색으로 날짜 찾기
+                    menu_snippet = extract_menu_from_html(response.text, today_keywords)
                     
-                    # HTML 파싱
-                    soup = BeautifulSoup(response.text, 'html.parser')
-                    
-                    # 게시글 목록 찾기 (div.post_item)
-                    posts = soup.select("div.post_item")
-                    
-                    if not posts:
-                        print("   ⚠️ 페이지는 열렸으나 게시글을 못 찾았습니다. (JavaScript 전용 페이지일 가능성)")
-                        # 혹시 HTML 내용을 보고 싶으면 아래 주석 해제
-                        # print(soup.text[:300])
-                        continue
-
-                    # 상위 3개 글 확인
-                    for post in posts[:3]:
-                        try:
-                            # 날짜 확인
-                            date_element = post.select_one("span.txt_date")
-                            if not date_element: continue
-                            
-                            post_date = date_element.get_text(strip=True)
-                            
-                            # 오늘인지 판별
-                            is_today = False
-                            if "분 전" in post_date or "시간 전" in post_date:
-                                is_today = True
-                            else:
-                                for kw in today_keywords:
-                                    if kw in post_date:
-                                        is_today = True
-                                        break
-                            
-                            if is_today:
-                                print(f"   🎉 [{name}] 오늘 메뉴 발견! ({post_date})")
-                                
-                                # 이미지 URL 추출
-                                img_tag = post.select_one("img")
-                                img_url = None
-                                if img_tag and img_tag.get('src'):
-                                    img_url = img_tag['src'].replace('fname=', '') # 썸네일 원본화
-                                    # http로 시작하지 않으면(상대경로) 처리
-                                    if not img_url.startswith('http'):
-                                        img_url = None 
-
-                                post_text = post.get_text(strip=True)
-
-                                if img_url:
-                                    send_slack_message(f"🍱 [{name}] 오늘 메뉴가 도착했습니다!", img_url)
-                                else:
-                                    send_slack_message(f"🍱 [{name}] 텍스트 메뉴입니다.\n{post_text[:200]}...")
-                                
-                                found_status[name] = True
-                                break
-                        except Exception as e:
-                            print(f"   글 분석 중 에러: {e}")
-                            continue
+                    if menu_snippet:
+                        print(f"   🎉 [{name}] 오늘짜 데이터를 찾았습니다!")
+                        print(f"   내용 일부: {menu_snippet[:50]}...")
+                        
+                        # 이미지 URL 찾기 (http~.jpg 패턴 검색)
+                        img_match = re.search(r'https?://\S+?(jpg|png|jpeg)', response.text)
+                        img_url = img_match.group(0) if img_match else None
+                        
+                        # 슬랙 전송
+                        msg_text = f"🍱 [{name}] 오늘 메뉴 발견!\n(내용 일부: {menu_snippet[:100]}...)"
+                        # 링크도 같이 줌
+                        msg_text += f"\n🔗 바로가기: {url}"
+                        
+                        if img_url:
+                            # 썸네일용 url 보정
+                            img_url = img_url.replace('"', '').replace('\\', '')
+                            send_slack_message(msg_text, img_url)
+                        else:
+                            send_slack_message(msg_text)
+                        
+                        found_status[name] = True
+                    else:
+                        print("   ❌ 소스코드 안에 오늘 날짜가 없습니다.")
 
                 except Exception as e:
-                    print(f"   ⚠️ 요청 중 에러: {e}")
+                    print(f"   ⚠️ 에러: {e}")
 
             if all(found_status.values()):
-                print("\n🚀 모든 식당 전송 완료! 퇴근합니다.")
+                print("\n🚀 모든 식당 완료! 퇴근합니다.")
                 return
 
             print(f"--- 5분 대기 ({i+1}/{max_retries}) ---")
             time.sleep(300)
 
-        send_slack_message("😢 3시간을 기다렸지만 메뉴를 가져오지 못했습니다.")
+        send_slack_message("😢 3시간 기다렸지만 데이터를 못 찾았습니다.")
 
     except Exception as e:
         print(f"치명적 오류: {e}")
