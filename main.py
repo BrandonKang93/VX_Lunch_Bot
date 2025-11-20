@@ -1,17 +1,18 @@
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import requests
 import time
 import re
-from datetime import datetime
+import os
+from datetime import datetime, timedelta, timezone
 
-# 슬랙 주소
-SLACK_WEBHOOK_URL = "https://hooks.slack.com/triggers/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"
+# 깃허브 Secret에서 주소 가져오기 (설정 안 했으면 직접 적어도 됨)
+SLACK_WEBHOOK_URL = os.environ.get('SLACK_WEBHOOK_URL')
+# 만약 Secret 설정이 귀찮으시면 위 줄을 지우고 아래처럼 직접 넣으세요.
+# SLACK_WEBHOOK_URL = "https://hooks.slack.com/triggers/..."
 
 RESTAURANTS = {
     "그린쿡": "https://pf.kakao.com/_yxgQDb/posts",
@@ -19,9 +20,6 @@ RESTAURANTS = {
 }
 
 def send_slack_message(text, image_url=None):
-    # [수정됨] 복잡한 포맷 다 버리고, 그냥 텍스트 뒤에 링크를 붙여서 보냅니다.
-    # 슬랙이 링크를 인식해서 이미지를 자동으로 보여줍니다.
-    
     final_text = text
     if image_url:
         final_text += f"\n\n👇 메뉴 이미지 보기 👇\n{image_url}"
@@ -29,18 +27,19 @@ def send_slack_message(text, image_url=None):
     payload = {"text": final_text}
     
     try:
-        print(f"   📤 슬랙 전송 중... (내용: {final_text[:30]}...)")
         requests.post(SLACK_WEBHOOK_URL, json=payload)
+        print(f"   📤 슬랙 전송 완료")
     except Exception as e:
         print(f"   ⚠️ 슬랙 전송 에러: {e}")
 
 def get_today_keywords():
-    now = datetime.now()
+    # 깃허브 서버(UTC) 시간을 한국 시간(KST)으로 변환
+    korea_time = datetime.now(timezone.utc) + timedelta(hours=9)
     return [
-        now.strftime("%y.%m.%d"),   # 24.11.20
-        now.strftime("%y/%m/%d"),   # 24/11/20
-        now.strftime("%m월 %d일"),  # 11월 20일
-        now.strftime("%m/%d")       # 11/20
+        korea_time.strftime("%y.%m.%d"),   # 24.11.20
+        korea_time.strftime("%y/%m/%d"),   # 24/11/20
+        korea_time.strftime("%m월 %d일"),  # 11월 20일
+        korea_time.strftime("%m/%d")       # 11/20
     ]
 
 def extract_url_regex(style_string):
@@ -51,33 +50,36 @@ def extract_url_regex(style_string):
     return None
 
 def get_lunch_menu():
-    print("🚀 [심플 모드] 이미지 링크를 텍스트로 직접 보냅니다...")
+    print("🚀 [GitHub Action] 서버에서 메뉴 탐색을 시작합니다...")
     
     options = Options()
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_experimental_option("detach", True)
-
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=options)
-    driver.maximize_window()
+    # [서버 전용 필수 설정]
+    options.add_argument("--headless=new")  # 화면 없이 실행 (필수!)
+    options.add_argument("--no-sandbox")    # 리눅스 권한 문제 방지
+    options.add_argument("--disable-dev-shm-usage") # 메모리 부족 방지
     
-    wait = WebDriverWait(driver, 10)
+    # [중요] PC 화면과 똑같은 구조(area_card)를 보기 위해 해상도 강제 설정
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+
+    driver = webdriver.Chrome(options=options)
+    
+    wait = WebDriverWait(driver, 15)
     today_keywords = get_today_keywords()
     found_status = {name: False for name in RESTAURANTS}
     
     try:
-        print(f"🔍 오늘 날짜 키워드: {today_keywords}")
+        print(f"🔍 오늘 날짜 키워드(KST): {today_keywords}")
         
         for name, url in RESTAURANTS.items():
             print(f"\n[{name}] 접속 중...")
             driver.get(url)
-            time.sleep(3)
+            time.sleep(3) # 로딩 안정화
             
             try:
+                # PC에서 성공했던 'area_card' 찾기 로직
                 wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div.area_card")))
                 posts = driver.find_elements(By.CSS_SELECTOR, "div.area_card")
-                
                 print(f"   ✅ 게시물 {len(posts)}개 로딩 완료")
 
                 for post in posts[:5]:
@@ -96,12 +98,16 @@ def get_lunch_menu():
                         
                         img_url = None
                         try:
+                            # 1순위: 썸네일 배경 이미지 (PC 구조)
                             thumb_div = post.find_element(By.CSS_SELECTOR, "div.wrap_fit_thumb")
                             style_attr = thumb_div.get_attribute("style")
                             img_url = extract_url_regex(style_attr)
-                            print(f"   👉 이미지 주소 추출: {img_url}")
                         except:
+                            pass
+                        
+                        if not img_url:
                             try:
+                                # 2순위: 본문 이미지
                                 img_tag = post.find_element(By.TAG_NAME, "img")
                                 img_url = img_tag.get_attribute("src")
                             except:
@@ -109,28 +115,24 @@ def get_lunch_menu():
 
                         if img_url:
                             img_url = img_url.replace("fname=", "")
-                            # [중요] 이미지가 있어도 텍스트 함수로 보냅니다
                             send_slack_message(f"🍱 [{name}] 오늘 메뉴 도착!", img_url)
                         else:
-                            print("   ⚠️ 이미지 없음, 텍스트만 전송")
                             send_slack_message(f"🍱 [{name}] 텍스트 메뉴입니다.\n{post_text[:200]}")
                         
                         found_status[name] = True
                         break 
             
             except Exception as e:
-                print(f"   ⚠️ {name} 탐색 중 에러: {e}")
-                
-        print("\n--------------------------------")
+                print(f"   ⚠️ {name} 탐색 실패: {e}")
+
         if all(found_status.values()):
-            print("✅ 완료! 슬랙을 확인하세요.")
+            print("✅ 모든 메뉴 전송 완료!")
         else:
-            print("❌ 일부 실패.")
+            print("❌ 일부 메뉴를 못 찾았습니다.")
             
     except Exception as e:
         print(f"에러: {e}")
     finally:
-        time.sleep(2)
         driver.quit()
 
 if __name__ == "__main__":
