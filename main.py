@@ -1,5 +1,5 @@
 import requests
-import json
+from bs4 import BeautifulSoup
 import os
 import time
 from datetime import datetime, timedelta, timezone
@@ -7,10 +7,9 @@ from datetime import datetime, timedelta, timezone
 # 설정
 SLACK_WEBHOOK_URL = os.environ.get('SLACK_WEBHOOK_URL')
 
-# 식당 ID (URL 맨 뒤에 있는 그 영어 코드)
 RESTAURANTS = {
-    "그린쿡": "_yxgQDb",     # https://pf.kakao.com/_yxgQDb
-    "런치스토리": "_Fwpwn"   # https://pf.kakao.com/_Fwpwn
+    "그린쿡": "https://pf.kakao.com/_yxgQDb/posts",
+    "런치스토리": "https://pf.kakao.com/_Fwpwn/posts"
 }
 
 def send_slack_message(text, image_url=None):
@@ -20,89 +19,108 @@ def send_slack_message(text, image_url=None):
     try:
         requests.post(SLACK_WEBHOOK_URL, json=payload)
     except Exception as e:
-        print(f"슬랙 전송 실패: {e}")
+        print(f"   ⚠️ 슬랙 전송 실패: {e}")
 
-def get_korea_today_date():
-    # 한국 시간 기준 오늘 날짜 (YYYY-MM-DD)
+def get_korea_today_keywords():
     korea_time = datetime.now(timezone.utc) + timedelta(hours=9)
-    return korea_time.strftime("%Y-%m-%d")
+    return [
+        korea_time.strftime("%y.%m.%d"),   # 24.11.20 (카카오 기본)
+        korea_time.strftime("%Y. %m. %d"), # 2024. 11. 20. (가끔 보임)
+        korea_time.strftime("%m월 %d일")   # 11월 20일
+    ]
 
 def get_lunch_menu():
-    today_str = get_korea_today_date()
-    print(f"🔍 [API 모드] 오늘({today_str}) 메뉴를 데이터 서버에서 직접 조회합니다.")
+    print("🕵️‍♀️ [구글봇 모드] 검색 엔진인 척 접근하여 데이터를 가져옵니다...")
+    
+    today_keywords = get_korea_today_keywords()
+    print(f"   🔍 찾는 날짜 키워드: {today_keywords} (또는 '분 전', '시간 전')")
 
-    # 3시간(36회) 반복
+    # 구글 검색 로봇의 헤더 (차단 회피용)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7"
+    }
+
+    # 3시간 반복 (36회)
     max_retries = 36
     found_status = {name: False for name in RESTAURANTS}
 
     try:
         for i in range(max_retries):
-            for name, profile_id in RESTAURANTS.items():
+            for name, url in RESTAURANTS.items():
                 if found_status[name]: continue
 
-                print(f"[{name}] 데이터 조회 중...")
+                print(f"\n[{name}] 페이지 읽는 중...")
                 
-                # 카카오 채널의 진짜 데이터 창고(API) 주소
-                api_url = f"https://pf-w4-web-api.kakao.com/profile/web/profiles/{profile_id}/posts?page=0&count=5"
-                
-                # 사람인 척 위장하는 헤더
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "Referer": f"https://pf.kakao.com/{profile_id}",
-                    "Accept-Language": "ko-KR,ko;q=0.9"
-                }
-
                 try:
-                    response = requests.get(api_url, headers=headers, timeout=10)
+                    response = requests.get(url, headers=headers, timeout=10)
                     
                     if response.status_code != 200:
                         print(f"   ⚠️ 접속 실패 (상태코드: {response.status_code})")
                         continue
-
-                    data = response.json()
-                    posts = data.get('items', [])
-
+                    
+                    # HTML 파싱
+                    soup = BeautifulSoup(response.text, 'html.parser')
+                    
+                    # 게시글 목록 찾기 (div.post_item)
+                    posts = soup.select("div.post_item")
+                    
                     if not posts:
-                        print("   ⚠️ 게시글 데이터가 없습니다.")
+                        print("   ⚠️ 페이지는 열렸으나 게시글을 못 찾았습니다. (JavaScript 전용 페이지일 가능성)")
+                        # 혹시 HTML 내용을 보고 싶으면 아래 주석 해제
+                        # print(soup.text[:300])
                         continue
 
-                    # 최신 글 3개 확인
-                    is_today = False
+                    # 상위 3개 글 확인
                     for post in posts[:3]:
-                        # 작성 시간 확인 (예: '2025-11-20 10:30:00' 또는 timestamp)
-                        created_at = post.get('created_at', '') # 2025-11-20 ... 형식으로 옴
-                        
-                        print(f"   📄 최신글 날짜: {created_at}")
-
-                        if today_str in created_at:
-                            print(f"   🎉 [{name}] 오늘 메뉴 데이터 발견!")
+                        try:
+                            # 날짜 확인
+                            date_element = post.select_one("span.txt_date")
+                            if not date_element: continue
                             
-                            # 이미지 URL 추출
-                            media = post.get('media', [])
-                            img_url = None
-                            if media and len(media) > 0:
-                                img_url = media[0].get('url') # 이미지 주소
+                            post_date = date_element.get_text(strip=True)
                             
-                            # 본문 내용
-                            content = post.get('title', '')
-                            
-                            if img_url:
-                                send_slack_message(f"🍱 [{name}] 오늘 메뉴가 도착했습니다!", img_url)
+                            # 오늘인지 판별
+                            is_today = False
+                            if "분 전" in post_date or "시간 전" in post_date:
+                                is_today = True
                             else:
-                                send_slack_message(f"🍱 [{name}] 텍스트 메뉴입니다.\n{content}")
+                                for kw in today_keywords:
+                                    if kw in post_date:
+                                        is_today = True
+                                        break
                             
-                            found_status[name] = True
-                            is_today = True
-                            break
-                    
-                    if not is_today:
-                         print("   ❌ 아직 오늘 날짜 글이 API에 없습니다.")
+                            if is_today:
+                                print(f"   🎉 [{name}] 오늘 메뉴 발견! ({post_date})")
+                                
+                                # 이미지 URL 추출
+                                img_tag = post.select_one("img")
+                                img_url = None
+                                if img_tag and img_tag.get('src'):
+                                    img_url = img_tag['src'].replace('fname=', '') # 썸네일 원본화
+                                    # http로 시작하지 않으면(상대경로) 처리
+                                    if not img_url.startswith('http'):
+                                        img_url = None 
+
+                                post_text = post.get_text(strip=True)
+
+                                if img_url:
+                                    send_slack_message(f"🍱 [{name}] 오늘 메뉴가 도착했습니다!", img_url)
+                                else:
+                                    send_slack_message(f"🍱 [{name}] 텍스트 메뉴입니다.\n{post_text[:200]}...")
+                                
+                                found_status[name] = True
+                                break
+                        except Exception as e:
+                            print(f"   글 분석 중 에러: {e}")
+                            continue
 
                 except Exception as e:
-                    print(f"   ⚠️ 에러 발생: {e}")
+                    print(f"   ⚠️ 요청 중 에러: {e}")
 
             if all(found_status.values()):
-                print("🚀 모든 식당 전송 완료! 퇴근합니다.")
+                print("\n🚀 모든 식당 전송 완료! 퇴근합니다.")
                 return
 
             print(f"--- 5분 대기 ({i+1}/{max_retries}) ---")
