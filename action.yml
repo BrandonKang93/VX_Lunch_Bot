@@ -1,0 +1,28 @@
+name: Lunch Bot
+on:
+  schedule:
+    # UTC 00:00 = 한국 시간 오전 09:00
+    # 월(1)~금(5) 실행
+    - cron: '0 0 * * 1-5'
+  workflow_dispatch: # 수동 실행 버튼
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install libraries
+        run: |
+          pip install selenium requests webdriver-manager
+
+      - name: Run Bot
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: python main.py
