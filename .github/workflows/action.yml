@@ -1,10 +1,20 @@
 name: Lunch Bot
+
 on:
   schedule:
-    # UTC 00:00 = 한국 시간 오전 09:00
-    # 월(1)~금(5) 실행
-    - cron: '0 0 * * 1-5'
-  workflow_dispatch: # 수동 실행 버튼
+    # -----------------------------------------------------------
+    # [시간 설정 설명]
+    # UTC 23:00 = 한국 시간(KST) 다음날 오전 08:00
+    #
+    # [요일 설정 설명]
+    # UTC 기준 일요일(0) 밤 23시 -> 한국 월요일 아침 8시
+    # UTC 기준 목요일(4) 밤 23시 -> 한국 금요일 아침 8시
+    # 따라서 0-4 (일~목)로 설정합니다.
+    # -----------------------------------------------------------
+    - cron: '0 23 * * 0-4'
+
+  # 수동으로 실행하고 싶을 때 누르는 버튼 기능
+  workflow_dispatch:
 
 jobs:
   build:
@@ -19,10 +29,13 @@ jobs:
           python-version: '3.9'
 
       - name: Install libraries
+        # 봇이 작동하는 데 필요한 도구들을 설치합니다.
         run: |
-          pip install selenium requests webdriver-manager beautifulsoup4
+          pip install selenium requests webdriver-manager
 
       - name: Run Bot
         env:
+          # 깃허브 Secret에 저장된 슬랙 주소를 가져옵니다.
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        # -u 옵션은 로그를 지연 없이 바로 출력하라는 뜻입니다.
         run: python -u main.py
