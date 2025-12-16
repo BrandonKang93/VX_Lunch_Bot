@@ -37,5 +37,9 @@ jobs:
         env:
           # 깃허브 Secret에 저장된 슬랙 주소를 가져옵니다.
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          # (B) 둘 다 올라올 때까지 재시도 설정 (필요시 조절)
+          MAX_ATTEMPTS: '12'
+          RETRY_SLEEP_SEC: '300'   # 5분
+          MAX_RUNTIME_MIN: '60'    # 최대 60분만 대기
         # -u 옵션은 로그를 지연 없이 바로 출력하라는 뜻입니다.
         run: python -u main.py
