@@ -38,7 +38,7 @@ def send_slack_message(text, image_url=None):
         if not SLACK_WEBHOOK_URL:
             print("   ⚠️ SLACK_WEBHOOK_URL 이 설정되지 않아 전송을 건너뜁니다.")
             return
-        requests.post(SLACK_WEBHOOK_URL, json=payload, timeout=15)
+        requests.post(SLACK_WEBHOOK_URL, json=payload, timeout=15, verify=False)
     except Exception as e:
         print(f"   ⚠️ 전송 에러: {e}")
 
