@@ -21,3 +21,4 @@ call .venv\Scripts\python.exe -u main.py
 endlocal
 
 
+
