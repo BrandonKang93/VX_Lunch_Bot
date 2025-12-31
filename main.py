@@ -9,6 +9,7 @@ import requests
 import time
 import re
 import os
+import urllib3
 from datetime import datetime, timedelta, timezone
 
 # ⚠️ 워크플로 웹훅 주소 (triggers/...) 그대로 사용
@@ -24,6 +25,9 @@ def send_slack_message(text, image_url=None):
     n8n 워크플로 웹훅으로 데이터를 보냅니다.
     텍스트와 이미지 URL을 분리하여 n8n에서 Blocks 구성을 자유롭게 할 수 있도록 합니다.
     """
+    # 사내 n8n 서버 사용 시 발생하는 SSL 경고 숨기기
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    
     payload = {
         "text": text,
         "image_url": image_url if image_url else ""
@@ -34,12 +38,13 @@ def send_slack_message(text, image_url=None):
         if not SLACK_WEBHOOK_URL:
             print("   ⚠️ SLACK_WEBHOOK_URL 이 설정되지 않아 전송을 건너뜁니다.")
             return
-        # n8n 웹훅 URL에 JSON 형태로 post 요청
-        # (verify=False는 SSL 인증서 문제가 있을 경우를 위해 유지합니다)
+        
+        # n8n 웹훅 URL에 JSON 형태로 post 요청 (verify=False)
         response = requests.post(SLACK_WEBHOOK_URL, json=payload, timeout=15, verify=False)
         
         if response.status_code != 200:
             print(f"   ⚠️ 전송 결과 이상 (Status: {response.status_code})")
+            
     except Exception as e:
         print(f"   ⚠️ 전송 에러: {e}")
 
