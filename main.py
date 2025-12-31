@@ -20,25 +20,26 @@ RESTAURANTS = {
 }
 
 def send_slack_message(text, image_url=None):
-    # [핵심 변경] 
-    # 워크플로 빌더에게 보낼 데이터를 준비합니다.
-    # 텍스트와 이미지 주소를 '분리'해서 보낼 수도 있지만,
-    # 가장 확실한 건 텍스트 안에 주소를 포함시키는 것입니다.
-    
-    final_message = text
-    if image_url:
-        # 주소 앞뒤로 공백을 넣어 슬랙이 링크를 잘 인식하게 합니다.
-        final_message += f"\n\n{image_url}\n" 
-
-    # 워크플로 빌더의 변수 이름이 'text'라고 가정합니다.
-    payload = {"text": final_message}
+    """
+    n8n 워크플로 웹훅으로 데이터를 보냅니다.
+    텍스트와 이미지 URL을 분리하여 n8n에서 Blocks 구성을 자유롭게 할 수 있도록 합니다.
+    """
+    payload = {
+        "text": text,
+        "image_url": image_url if image_url else ""
+    }
     
     try:
-        print(f"   📤 전송 중... (내용: {final_message[:30]}...)")
+        print(f"   📤 전송 중... (텍스트: {text[:20]}...)")
         if not SLACK_WEBHOOK_URL:
             print("   ⚠️ SLACK_WEBHOOK_URL 이 설정되지 않아 전송을 건너뜁니다.")
             return
-        requests.post(SLACK_WEBHOOK_URL, json=payload, timeout=15, verify=False)
+        # n8n 웹훅 URL에 JSON 형태로 post 요청
+        # (verify=False는 SSL 인증서 문제가 있을 경우를 위해 유지합니다)
+        response = requests.post(SLACK_WEBHOOK_URL, json=payload, timeout=15, verify=False)
+        
+        if response.status_code != 200:
+            print(f"   ⚠️ 전송 결과 이상 (Status: {response.status_code})")
     except Exception as e:
         print(f"   ⚠️ 전송 에러: {e}")
 
